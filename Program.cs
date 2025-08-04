@@ -10,9 +10,14 @@ using Going.Plaid.Accounts;
 using Going.Plaid.Transactions;
 using Going.Plaid.Item;
 using Going.Plaid.Link;
+using PlaidMCP.Security;
 
 var builder = Host.CreateApplicationBuilder(args);
 builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Information);
+
+// Parse persistence configuration
+var persist = System.Environment.GetEnvironmentVariable("PLAIDMCP_PERSIST")?.Equals("true", StringComparison.OrdinalIgnoreCase) == true
+              || args.Contains("--persist");
 
 // Configure Plaid client with environment variables
 builder.Services.AddSingleton(_ =>
@@ -32,6 +37,22 @@ builder.Services.AddSingleton(_ =>
         ?? throw new InvalidOperationException("PLAID_CLIENT_ID environment variable is required");
 
     return new PlaidClient(environment, secret: secret, clientId: clientId);
+});
+
+// Configure token store based on persistence setting
+builder.Services.AddSingleton<ITokenStore>(sp =>
+{
+    var logger = sp.GetRequiredService<ILogger<Program>>();
+    if (persist)
+    {
+        logger.LogInformation("Using FileTokenStore for persistent token storage");
+        return new FileTokenStore();
+    }
+    else
+    {
+        logger.LogInformation("Using MemoryTokenStore for ephemeral token storage");
+        return new MemoryTokenStore();
+    }
 });
 
 // Configure MCP server
@@ -84,33 +105,38 @@ public static class PlaidTools
             
             return System.Text.Json.JsonSerializer.Serialize(new 
             { 
-                access_token = exchangeResponse.AccessToken,
                 item_id = exchangeResponse.ItemId,
                 institution_id = institution_id,
                 products = products,
-                success = true
+                success = true,
+                message = "Sandbox item created. Use PlaidExchangePublicToken with a real public_token in production."
             });
         }
         catch (Exception ex)
         {
             return System.Text.Json.JsonSerializer.Serialize(new 
             { 
-                error = ex.Message,
+                error = SafeLog.RedactException(ex),
                 success = false 
             });
         }
     }
 
     /// <summary>
-    /// List all accounts for a given access_token.
+    /// List all accounts for a given item_ref.
     /// </summary>
-    [McpServerTool, Description("List accounts for an access_token")]
+    [McpServerTool, Description("List accounts for an item")]
     public static async Task<string> PlaidListAccounts(
         PlaidClient plaid, 
-        [Description("Access token for the item")] string access_token)
+        ITokenStore store,
+        [Description("Your internal user id")] string user_id,
+        [Description("Item reference from PlaidExchangePublicToken")] string item_ref)
     {
         try
         {
+            var access_token = await store.GetAccessTokenAsync(user_id, item_ref)
+                ?? throw new InvalidOperationException($"Unknown item_ref: {SafeLog.Redact(item_ref)}");
+                
             var request = new AccountsGetRequest { AccessToken = access_token };
             var response = await plaid.AccountsGetAsync(request);
             
@@ -142,22 +168,27 @@ public static class PlaidTools
         {
             return System.Text.Json.JsonSerializer.Serialize(new 
             { 
-                error = ex.Message,
+                error = SafeLog.RedactException(ex),
                 success = false 
             });
         }
     }
 
     /// <summary>
-    /// Get real-time account balances for an access_token.
+    /// Get real-time account balances for an item_ref.
     /// </summary>
-    [McpServerTool, Description("Get balances for an access_token")]
+    [McpServerTool, Description("Get balances for an item")]
     public static async Task<string> PlaidBalances(
         PlaidClient plaid, 
-        [Description("Access token for the item")] string access_token)
+        ITokenStore store,
+        [Description("Your internal user id")] string user_id,
+        [Description("Item reference from PlaidExchangePublicToken")] string item_ref)
     {
         try
         {
+            var access_token = await store.GetAccessTokenAsync(user_id, item_ref)
+                ?? throw new InvalidOperationException($"Unknown item_ref: {SafeLog.Redact(item_ref)}");
+                
             var request = new AccountsBalanceGetRequest { AccessToken = access_token };
             var response = await plaid.AccountsBalanceGetAsync(request);
             
@@ -186,7 +217,7 @@ public static class PlaidTools
         {
             return System.Text.Json.JsonSerializer.Serialize(new 
             { 
-                error = ex.Message,
+                error = SafeLog.RedactException(ex),
                 success = false 
             });
         }
@@ -198,18 +229,34 @@ public static class PlaidTools
     [McpServerTool, Description("Transactions sync; returns added/modified/removed and next_cursor")]
     public static async Task<string> PlaidTransactionsSync(
         PlaidClient plaid, 
-        [Description("Access token for the item")] string access_token, 
-        [Description("Cursor for pagination - null for initial sync")] string? cursor = null)
+        ITokenStore store,
+        [Description("Your internal user id")] string user_id,
+        [Description("Item reference from PlaidExchangePublicToken")] string item_ref,
+        [Description("Cursor for pagination - if not provided, uses stored cursor or starts fresh")] string? cursor = null)
     {
         try
         {
+            var access_token = await store.GetAccessTokenAsync(user_id, item_ref)
+                ?? throw new InvalidOperationException($"Unknown item_ref: {SafeLog.Redact(item_ref)}");
+            
+            // Use provided cursor or get stored cursor for this item
+            var actualCursor = cursor;
+            if (string.IsNullOrEmpty(actualCursor))
+            {
+                var itemSecret = await store.GetAsync(user_id, item_ref);
+                actualCursor = itemSecret?.TransactionsCursor;
+            }
+                
             var request = new TransactionsSyncRequest
             {
                 AccessToken = access_token,
-                Cursor = cursor
+                Cursor = actualCursor
             };
             
             var response = await plaid.TransactionsSyncAsync(request);
+            
+            // Update cursor after successful sync
+            await store.UpdateCursorAsync(user_id, item_ref, response.NextCursor);
             
             var addedTransactions = response.Added.Select(tx => new
             {
@@ -254,7 +301,7 @@ public static class PlaidTools
         {
             return System.Text.Json.JsonSerializer.Serialize(new 
             { 
-                error = ex.Message,
+                error = SafeLog.RedactException(ex),
                 success = false 
             });
         }
@@ -266,10 +313,15 @@ public static class PlaidTools
     [McpServerTool, Description("Get item details including institution info and available products")]
     public static async Task<string> PlaidGetItemInfo(
         PlaidClient plaid, 
-        [Description("Access token for the item")] string access_token)
+        ITokenStore store,
+        [Description("Your internal user id")] string user_id,
+        [Description("Item reference from PlaidExchangePublicToken")] string item_ref)
     {
         try
         {
+            var access_token = await store.GetAccessTokenAsync(user_id, item_ref)
+                ?? throw new InvalidOperationException($"Unknown item_ref: {SafeLog.Redact(item_ref)}");
+                
             var request = new ItemGetRequest { AccessToken = access_token };
             var response = await plaid.ItemGetAsync(request);
             
@@ -290,7 +342,7 @@ public static class PlaidTools
         {
             return System.Text.Json.JsonSerializer.Serialize(new 
             { 
-                error = ex.Message,
+                error = SafeLog.RedactException(ex),
                 success = false 
             });
         }
@@ -360,7 +412,7 @@ public static class PlaidTools
         {
             return System.Text.Json.JsonSerializer.Serialize(new 
             { 
-                error = ex.Message,
+                error = SafeLog.RedactException(ex),
                 success = false 
             });
         }

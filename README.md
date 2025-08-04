@@ -1,173 +1,181 @@
 # Plaid MCP Server
 
-A .NET Model Context Protocol (MCP) server that provides AI agents with access to Plaid's banking APIs for personal finance management.
+A .NET MCP (Model Context Protocol) server that integrates with Plaid for personal finance management. This server provides secure, encrypted token storage and exposes Plaid APIs as MCP tools for AI agents.
 
-## Overview
+## 🔒 Security Features
 
-This MCP server exposes Plaid's financial data APIs as tools that AI agents can use to help users manage their personal finances. It supports both sandbox testing and production environments, providing a secure and structured way for AI assistants to interact with banking data.
+### Secure Token Persistence
+- **Encrypted Storage**: Access tokens are encrypted at rest using AES-GCM with 256-bit keys
+- **Item References**: Tools use secure `item_ref` aliases instead of raw access tokens
+- **No Secrets in I/O**: Access tokens and sensitive data are never returned in tool responses
+- **Configurable Storage**: Choose between ephemeral (memory) or persistent (encrypted disk) storage
+- **Cross-Platform**: Windows DPAPI support with AES-GCM fallback for other platforms
 
-## Features
+### Storage Backends
+- **MemoryTokenStore** (default): Ephemeral in-memory storage for development/testing
+- **FileTokenStore**: AES-GCM encrypted JSON storage in `~/.plaidmcp/v1/tokens.json.gcm`
 
-- **Account Management**: List accounts and get real-time balances
-- **Transaction Sync**: Incremental transaction synchronization with cursor-based pagination
-- **Sandbox Testing**: Create test items and data for development
-- **Link Token Creation**: Generate tokens for Plaid Link integration
-- **Item Information**: Retrieve detailed information about connected financial institutions
+## 🚀 Quick Start
 
-## Prerequisites
+### Installation & Setup
 
-- .NET 9.0 or later
-- Plaid account with API credentials
-- MCP-compatible client (like Claude Desktop)
+1. **Clone and build:**
+   ```bash
+   git clone https://github.com/arjabbar/PlaidMCP.git
+   cd PlaidMCP
+   dotnet build
+   ```
 
-## Installation
+2. **Set up environment variables:**
+   ```bash
+   export PLAID_CLIENT_ID=your_client_id
+   export PLAID_SECRET=your_secret_key
+   export PLAID_ENV=sandbox  # or development, production
+   
+   # Optional: Enable persistent storage
+   export PLAIDMCP_PERSIST=true
+   
+   # Optional: Custom encryption key (recommended for production)
+   export PLAIDMCP_VAULT_KEY=$(openssl rand -base64 32)
+   ```
 
-1. Clone the repository:
+3. **Run the server:**
+   ```bash
+   # Ephemeral storage (default)
+   dotnet run
+   
+   # Persistent storage
+   dotnet run -- --persist
+   # OR
+   PLAIDMCP_PERSIST=true dotnet run
+   ```
+
+## 🔧 Available Tools
+
+### Token Management Tools
+- **PlaidCreateLinkToken**: Create Link tokens for Plaid Link initialization
+- **PlaidExchangePublicToken**: Exchange public_token for secure item_ref (stores encrypted access_token)
+- **PlaidListItems**: List all linked items for a user (shows item_ref, metadata, no secrets)
+- **PlaidCreateUpdateLinkToken**: Create update-mode Link tokens for relinking existing items
+- **PlaidRemoveItem**: Revoke and remove items (calls Plaid API and removes local storage)
+
+### Account & Transaction Tools
+- **PlaidListAccounts**: List accounts for an item_ref
+- **PlaidBalances**: Get real-time account balances for an item_ref
+- **PlaidTransactionsSync**: Sync transactions with automatic cursor persistence
+- **PlaidGetItemInfo**: Get item details and institution information
+- **PlaidCreateSandboxItem**: Create sandbox items for testing (development only)
+
+### Key Changes from v1
+- ✅ All tools now use `item_ref` instead of `access_token` parameters
+- ✅ Automatic transaction cursor storage and retrieval
+- ✅ Exception messages are redacted to prevent token leakage
+- ✅ Access tokens never appear in tool responses
+
+## 📋 Typical Workflow
+
+### Initial Setup
+1. **Create Link Token**:
+   ```
+   PlaidCreateLinkToken(user_id="user123", user_name="John Doe")
+   → Returns: { link_token: "link-sandbox-...", expires_at: "..." }
+   ```
+
+2. **Complete Plaid Link** (in your app/frontend):
+   - Use the link_token to initialize Plaid Link
+   - User completes bank connection
+   - Plaid Link returns a public_token
+
+3. **Exchange for Secure Reference**:
+   ```
+   PlaidExchangePublicToken(user_id="user123", public_token="public-sandbox-...")
+   → Returns: { item_ref: "item_a1b2", item_id: "...", success: true }
+   ```
+
+### Using Stored Items
+4. **List Your Items**:
+   ```
+   PlaidListItems(user_id="user123")
+   → Returns: { items: [{ item_ref: "item_a1b2", item_id: "...", ... }] }
+   ```
+
+5. **Access Account Data**:
+   ```
+   PlaidListAccounts(user_id="user123", item_ref="item_a1b2")
+   PlaidBalances(user_id="user123", item_ref="item_a1b2")
+   PlaidTransactionsSync(user_id="user123", item_ref="item_a1b2")
+   ```
+
+### Maintenance
+6. **Update/Relink When Needed**:
+   ```
+   PlaidCreateUpdateLinkToken(user_id="user123", item_ref="item_a1b2")
+   → Returns: { link_token: "link-update-...", expires_at: "..." }
+   ```
+
+7. **Remove Items**:
+   ```
+   PlaidRemoveItem(user_id="user123", item_ref="item_a1b2")
+   → Returns: { removed: true, success: true }
+   ```
+
+## 🔐 Security Configuration
+
+### Encryption Key Management
+
+**Recommended for Production (Linux/macOS):**
 ```bash
-git clone <repository-url>
-cd PlaidMCP
+# Generate and store a master key
+export PLAIDMCP_VAULT_KEY=$(openssl rand -base64 32)
+echo "PLAIDMCP_VAULT_KEY=$PLAIDMCP_VAULT_KEY" >> ~/.bashrc
 ```
 
-2. Restore dependencies:
+**Windows:**
+- Uses DPAPI by default (no manual key needed)
+- Optionally set `PLAIDMCP_VAULT_KEY` for cross-platform compatibility
+
+**Key Management Options:**
+1. **Environment Variable**: `PLAIDMCP_VAULT_KEY` (base64-encoded 32 bytes)
+2. **Windows DPAPI**: Automatic per-user key derivation (Windows only)
+3. **Ephemeral Fallback**: Random key per session (development only)
+
+### Storage Security
+- **File Permissions**: Unix files/directories automatically set to 600/700
+- **Encryption**: AES-GCM with 256-bit keys and 16-byte authentication tags
+- **No Plaintext**: Access tokens never stored in plaintext
+- **Zero Dependencies**: No external key management services required
+
+## 🛠️ Development
+
+### Environment Variables
 ```bash
-dotnet restore
+PLAID_CLIENT_ID=your_client_id      # Required
+PLAID_SECRET=your_secret_key        # Required  
+PLAID_ENV=sandbox                   # Optional: sandbox|development|production
+PLAIDMCP_PERSIST=true              # Optional: Enable persistent storage
+PLAIDMCP_VAULT_KEY=<base64-key>    # Optional: Custom encryption key
 ```
-
-3. Build the project:
-```bash
-dotnet build
-```
-
-## Configuration
-
-Set the following environment variables:
-
-```bash
-export PLAID_CLIENT_ID="your_plaid_client_id"
-export PLAID_SECRET="your_plaid_secret"
-export PLAID_ENV="sandbox"  # or "development" or "production"
-```
-
-## Usage
-
-### Running the Server
-
-```bash
-PLAID_CLIENT_ID=your_id PLAID_SECRET=your_secret PLAID_ENV=sandbox dotnet run
-```
-
-### Available Tools
-
-The server exposes the following tools to MCP clients:
-
-#### `PlaidCreateSandboxItem`
-Create a sandbox item for testing purposes.
-- **Parameters**: `institution_id`, `products`
-- **Returns**: Access token and item details
-
-#### `PlaidListAccounts`
-List all accounts for a given access token.
-- **Parameters**: `access_token`
-- **Returns**: Account details including balances
-
-#### `PlaidBalances`
-Get real-time account balances.
-- **Parameters**: `access_token`
-- **Returns**: Current balance information for all accounts
-
-#### `PlaidTransactionsSync`
-Sync transactions with incremental updates.
-- **Parameters**: `access_token`, `cursor` (optional)
-- **Returns**: Added, modified, and removed transactions with next cursor
-
-#### `PlaidGetItemInfo`
-Get detailed information about a Plaid item.
-- **Parameters**: `access_token`
-- **Returns**: Item details, institution info, and available products
-
-#### `PlaidCreateLinkToken`
-Create a link token for Plaid Link initialization.
-- **Parameters**: `user_id`, `user_name`, `user_email`, `products`, `country_codes`
-- **Returns**: Link token and expiration
-
-## MCP Client Configuration
-
-To use this server with Claude Desktop, add the following to your MCP configuration:
-
-```json
-{
-  "mcpServers": {
-    "plaid": {
-      "command": "dotnet",
-      "args": ["run", "--project", "/path/to/PlaidMCP"],
-      "env": {
-        "PLAID_CLIENT_ID": "your_plaid_client_id",
-        "PLAID_SECRET": "your_plaid_secret", 
-        "PLAID_ENV": "sandbox"
-      }
-    }
-  }
-}
-```
-
-## Development
 
 ### Project Structure
-
 ```
 PlaidMCP/
-├── Program.cs              # Main MCP server implementation
-├── PlaidMCP.csproj        # Project file with dependencies
-├── .github/
-│   └── copilot-instructions.md
-└── README.md
+├── Program.cs                     # Main application with legacy tools
+├── PlaidMCP.csproj               # Project configuration
+├── Security/                     # Security infrastructure
+│   ├── ITokenStore.cs           # Token storage interface
+│   ├── ItemSecret.cs            # Encrypted token metadata model
+│   ├── MemoryTokenStore.cs      # In-memory storage implementation
+│   ├── FileTokenStore.cs        # Encrypted file storage implementation
+│   ├── AesGcmCrypter.cs         # AES-GCM encryption utilities
+│   ├── VaultKeyProvider.cs      # Cross-platform key derivation
+│   └── SafeLog.cs               # Sensitive data redaction
+└── Tools/                       # New secure MCP tools
+    ├── PlaidExchangePublicTokenTool.cs
+    ├── PlaidListItemsTool.cs
+    ├── PlaidCreateUpdateLinkTokenTool.cs
+    └── PlaidRemoveItemTool.cs
 ```
 
-### Adding New Tools
+## 📄 License
 
-To add new Plaid API endpoints:
-
-1. Create a new static method in the `PlaidTools` class
-2. Decorate with `[McpServerTool]` and `[Description]` attributes
-3. Add proper parameter descriptions using `[Description]` attributes
-4. Implement error handling and return structured JSON responses
-
-### Testing
-
-Use Plaid's sandbox environment for testing:
-
-1. Set `PLAID_ENV=sandbox`
-2. Use the `PlaidCreateSandboxItem` tool to create test data
-3. Test other tools with the generated access tokens
-
-## Security Considerations
-
-- **Never log access tokens** - They provide full access to user financial data
-- **Use environment variables** for sensitive configuration
-- **Validate all inputs** to prevent injection attacks
-- **Follow Plaid's security guidelines** for production deployments
-
-## Dependencies
-
-- **ModelContextProtocol** (0.3.0-preview.3) - Official C# MCP SDK
-- **Going.Plaid** (6.47.1) - Plaid .NET client library
-- **Microsoft.Extensions.Hosting** (9.0.7) - Hosting framework
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For issues related to:
-- **Plaid APIs**: Check [Plaid's documentation](https://plaid.com/docs/)
-- **MCP Protocol**: See [MCP documentation](https://modelcontextprotocol.io/)
-- **This server**: Open an issue in this repository
+This project is licensed under the MIT License.
