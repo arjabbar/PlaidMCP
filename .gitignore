@@ -1,0 +1,40 @@
+# Build artifacts
+bin/
+obj/
+*.dll
+*.pdb
+*.exe
+
+# VS Code settings
+.vscode/settings.json
+
+# Environment files with secrets
+.env
+*.env.local
+
+# User-specific files
+*.suo
+*.user
+*.userprefs
+*.sln.docstates
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE files
+.vs/
+.idea/
+*.swp
+*.swo
+
+# Plaid specific
+# Never commit actual API keys or access tokens!
