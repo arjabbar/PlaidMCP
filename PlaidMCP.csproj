@@ -12,6 +12,7 @@
     <PackageReference Include="Going.Plaid" Version="6.47.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.7" />
     <PackageReference Include="ModelContextProtocol" Version="0.3.0-preview.3" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.7" />
   </ItemGroup>
 
 </Project>
