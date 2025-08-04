@@ -30,7 +30,10 @@ public sealed class MemoryTokenStore : ITokenStore
     }
 
     public Task<IReadOnlyList<ItemSecret>> ListAsync(string userId)
-        => Task.FromResult<IReadOnlyList<ItemSecret>>(_items.Where(kv => kv.Key.userId == userId).Select(kv => kv.Value).ToList());
+    {
+        var result = _items.Where(kv => kv.Key.userId == userId).Select(kv => kv.Value).ToList();
+        return Task.FromResult<IReadOnlyList<ItemSecret>>(result);
+    }
 
     public Task RemoveAsync(string userId, string itemRefOrItemId)
     {
