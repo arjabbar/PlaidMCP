@@ -24,8 +24,9 @@ public sealed class MemoryTokenStore : ITokenStore
 
     public Task<ItemSecret?> GetAsync(string userId, string itemRefOrItemId)
     {
-        var result = _items.FirstOrDefault(kv =>
-              kv.Key.userId == userId && (kv.Key.itemRef == itemRefOrItemId || kv.Value.ItemId == itemRefOrItemId)).Value;
+        var kvp = _items.FirstOrDefault(kv =>
+              kv.Key.userId == userId && (kv.Key.itemRef == itemRefOrItemId || kv.Value.ItemId == itemRefOrItemId));
+        var result = kvp.Key != default ? kvp.Value : null;
         return Task.FromResult(result);
     }
 
